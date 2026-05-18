@@ -1,7 +1,11 @@
-import io
+"""
+Fetches ALL US-listed common stocks from the NASDAQ screener API.
+Free, no API key needed. Covers NYSE, NASDAQ, AMEX (~8,000+ stocks).
+Filters out ETFs, warrants, rights, preferred shares, and test issues.
+"""
 import logging
+import re
 
-import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
@@ -11,94 +15,62 @@ _HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/",
 }
 
-# Fallback list — used if Wikipedia is unreachable
-_FALLBACK_SP500 = [
-    "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","BRK-B","LLY","AVGO",
-    "JPM","TSLA","UNH","XOM","V","MA","PG","JNJ","HD","MRK","COST","ABBV",
-    "CVX","CRM","BAC","NFLX","AMD","PEP","KO","TMO","ACN","WMT","MCD","ABT",
-    "LIN","DHR","TXN","ORCL","PM","ADBE","NEE","QCOM","RTX","GE","AMGN","IBM",
-    "SPGI","CAT","INTU","LOW","HON","UNP","AMAT","GS","ELV","BKNG","ISRG","SYK",
-    "MDT","VRTX","T","BLK","PLD","REGN","CB","GILD","C","ADI","MDLZ","AXP",
-    "SBUX","MO","LRCX","CI","SO","TJX","ETN","DE","ZTS","BMY","SCHW","DUK",
-    "BSX","KLAC","PGR","AON","NOC","ITW","SLB","CME","MMC","PH","SNPS","CDNS",
-    "WM","FCX","GD","APH","FI","MCO","EMR","EOG","MPC","PSX","OXY","HCA","CL",
-    "USB","MSI","ORLY","ADP","NSC","MCK","CTAS","ICE","EW","PCAR","NKE","TGT",
-    "WELL","TDG","ECL","DXCM","ROP","CARR","MNST","SHW","APD","OKE","AIG","AFL",
-    "PSA","NEM","D","HLT","WBA","F","GM","NXPI","MCHP","PAYX","ROST","STZ",
-    "AEP","KMB","HES","PEG","HSY","TEL","ODFL","GWW","VRSK","EXC","XEL","CTSH",
-    "EBAY","GEHC","CSGP","IDXX","ACGL","WEC","FAST","MSCI","VLO","DVN","FANG",
-    "PPG","IQV","KEYS","OTIS","CPRT","BKR","GLW","AME","ANSS","IR","ALB","EPAM",
-    "WAB","DLTR","HPQ","KHC","ON","TROW","FTV","DOW","LHX","LYB","APTV","OMC",
-    "LDOS","EXPD","CBOE","MTD","WAT","TTWO","FDS","BR","AKAM","TER","MPWR","ENPH",
-    "TSCO","ULTA","BALL","PKI","IEX","COO","TECH","TYL","GPC","NTAP","HOLX",
-    "SWKS","ZBRA","CTLT","LW","JBHT","SNA","HSIC","POOL","FFIV","RE","QRVO",
-    "PNR","ALLE","HII","AOS","NDSN","MAS","TXT","ROL","BWA","HRL","CPB","LKQ",
-    "NVR","PHM","DHI","LEN","TOL","MTH","TPR","RL","PVH","HBI","GPS","LB",
-    "WRK","IP","PKG","CF","MOS","FMC","CE","EMN","AXON","GNRC","TT","CHRW",
-    "EXPD","XYL","RRX","PTC","PAYC","TRMB","VRSN","JKHY","CTXS","INCY","BIIB",
-    "ALGN","DXCM","PODD","MTCH","ZM","DOCU","OKTA","SNOW","PLTR","COIN","RBLX",
-    "UBER","LYFT","DASH","ABNB","NET","CRWD","DDOG","S","MDB","GTLB","PATH",
-    "SPG","O","VICI","AMT","CCI","EQIX","DLR","SBAC","IRM","WY","AVB","EQR",
-    "ESS","UDR","CPT","MAA","NNN","FR","EGP","STAG","TRNO","COLD","REXR",
-]
+_SCREENER_URL = (
+    "https://api.nasdaq.com/api/screener/stocks"
+    "?tableonly=true&limit=5000&exchange={exchange}&download=true"
+)
 
-_FALLBACK_SP400 = [
-    "AXTA","BWXT","CACC","CASY","CBRE","CFG","CHRW","CLF","COLM","CPE","CRI",
-    "CRL","CVLT","DAL","DKS","DT","DVA","ELAN","ENTG","EQT","ETSY","EWBC",
-    "EXAS","EXLS","EXR","FAF","FICO","FHN","FN","FNF","FND","FNV","FSLR",
-    "GBCI","GGG","GLOB","GMS","HAE","HEI","HFC","HGV","HP","HPE","HZNP",
-    "IAA","IART","IBOC","IDCC","IDA","IHRT","INGR","INVA","JAZZ","JEF","JNPR",
-    "KBH","KEX","KNX","KRC","LANC","LECO","LEG","LFUS","LII","LITE","LKFN",
-    "LNTH","LNW","M","MAN","MASI","MATX","MBIN","MED","MEDP","MELI","MMSI",
-    "MMS","MODG","MOH","MORN","MRC","MSA","MSGS","MTG","MTN","MTSI","MUR",
-    "NATI","NBR","NBTB","NEOG","NEU","NFG","NFLX","NJR","NNN","NOVT","NRG",
-    "NSA","NSP","NVST","NVT","OGS","OHI","OII","OLED","OLN","OMCL","OMF",
-    "ONTO","ORA","ORCL","OSK","OTTR","OUT","OZK","PAYA","PCVX","PDCO","PEN",
-    "PII","PNM","POST","POWL","PRA","PRG","PRGO","PRKS","PRMW","PRSP","PSB",
-    "PSMT","PTCT","PTEN","PTVE","PVH","RBC","RGEN","RLI","RNR","RRC","RS",
-    "RUSHA","RXO","SAIA","SANM","SCI","SEE","SF","SFIX","SFM","SGMS","SHAK",
-    "SIGI","SITE","SJM","SKX","SLGN","SM","SMG","SNV","SOLV","SPB","SSNC",
-    "STEL","STLD","SUM","SWX","SYNA","SYF","TCBI","TFSL","TFX","THG","TNET",
-    "TNL","TOST","TOWN","TREX","TRIP","TRMK","TROW","TRST","TRU","TRUP","TRVG",
-    "TSN","TTC","TTEC","TTGT","TWNK","TXG","UGI","UNF","UNFI","USFD","USPH",
-    "VCEL","VCRA","VEEV","VIRT","VMEO","VSH","VSCO","VVV","WDFC","WEN","WHR",
-    "WIRE","WMS","WOR","WRB","WSFS","WTS","WW","XPO","XRAY","XRX","YELP","ZI",
-]
+_EXCHANGES = ["nasdaq", "nyse", "amex"]
+
+# Valid common stock ticker: 1-5 uppercase letters only
+_VALID_SYMBOL = re.compile(r'^[A-Z]{1,5}$')
+_SKIP_SUFFIXES = ("W", "R", "U", "WS", "WT", "RT", "WI", "VI", "PR", "PL")
 
 
-def _fetch_wikipedia_tickers(url: str, symbol_col: str = "Symbol") -> list[str]:
+def _is_common_stock(symbol: str) -> bool:
+    if not _VALID_SYMBOL.match(symbol):
+        return False
+    for suffix in _SKIP_SUFFIXES:
+        if symbol.endswith(suffix) and len(symbol) > len(suffix):
+            return False
+    return True
+
+
+def _fetch_exchange(exchange: str) -> list[str]:
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=20)
-        resp.raise_for_status()
-        tables = pd.read_html(io.StringIO(resp.text), attrs={"id": "constituents"})
-        if tables:
-            return tables[0][symbol_col].tolist()
-        # fallback: try any table with a Symbol column
-        tables = pd.read_html(io.StringIO(resp.text))
-        for t in tables:
-            if symbol_col in t.columns:
-                return t[symbol_col].tolist()
+        url = _SCREENER_URL.format(exchange=exchange)
+        r = requests.get(url, headers=_HEADERS, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        rows = data.get("data", {}).get("rows", [])
+        tickers = []
+        for row in rows:
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if _is_common_stock(symbol):
+                tickers.append(symbol)
+        logger.info(f"  {exchange.upper()}: {len(tickers)} common stocks")
+        return tickers
     except Exception as e:
-        logger.warning(f"Failed to fetch {url}: {e}")
-    return []
+        logger.warning(f"Could not fetch {exchange} listing: {e}")
+        return []
 
 
 def get_universe() -> list[str]:
-    sp500 = _fetch_wikipedia_tickers(
-        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    )
-    sp400 = _fetch_wikipedia_tickers(
-        "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
-    )
+    all_tickers: list[str] = []
+    for exchange in _EXCHANGES:
+        all_tickers.extend(_fetch_exchange(exchange))
 
-    if not sp500:
-        logger.warning("Wikipedia blocked — using built-in fallback ticker list")
-        sp500 = _FALLBACK_SP500
-        sp400 = _FALLBACK_SP400
+    unique = list(set(all_tickers))
 
-    all_tickers = list({t.replace(".", "-") for t in sp500 + sp400})
-    logger.info(f"Universe: {len(all_tickers)} tickers (SP500={len(sp500)}, SP400={len(sp400)})")
-    return all_tickers
+    if not unique:
+        raise RuntimeError("Could not fetch any tickers — check internet connection")
+
+    logger.info(f"Total universe: {len(unique)} US common stocks")
+    return unique

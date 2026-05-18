@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """
-Stock Breakout Scanner
-Scans S&P 500 + S&P 400 MidCap for volume surge + price breakout signals.
-Runs daily after market close and emails a ranked list of candidates.
+Stock Breakout Scanner — Full US Market Edition
+Scans ALL US-listed common stocks (~7,000-9,000) for early parabolic setups.
+
+Pipeline:
+  1. Fetch universe from NASDAQ trader files (free, all exchanges)
+  2. Batch-download OHLCV in groups of 200 (fast)
+  3. Apply technical signals: price $2-$50, volume surge, breakout, MA, RSI
+  4. Fetch fundamentals only for top technical candidates (~50-200 stocks)
+  5. Filter: positive EPS + positive revenue growth
+  6. Rank and email final list
 """
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from datetime import date
 
+import pandas as pd
 import yfinance as yf
 
 from alerts import send_alert
-from config import FETCH_WORKERS, TOP_N
+from config import TOP_N, MIN_PRICE, MIN_AVG_VOLUME
 from screener import analyze
 from universe import get_universe
 
@@ -22,43 +30,112 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+MAX_PRICE = 50.0
+BATCH_SIZE = 200
+MIN_MENTIONS = 3
 
-def _fetch(ticker: str) -> tuple[str, object]:
+
+def _batch_download(tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """Download OHLCV for a batch of tickers, return dict of ticker -> DataFrame."""
     try:
-        hist = yf.download(
-            ticker,
+        raw = yf.download(
+            tickers,
             period="1y",
             interval="1d",
-            progress=False,
+            group_by="ticker",
             auto_adjust=True,
+            progress=False,
+            threads=True,
         )
-        return ticker, (hist if not hist.empty and len(hist) >= 50 else None)
     except Exception as e:
-        logger.debug(f"{ticker}: download error — {e}")
-        return ticker, None
+        logger.debug(f"Batch download failed: {e}")
+        return {}
+
+    result = {}
+    if len(tickers) == 1:
+        t = tickers[0]
+        if not raw.empty:
+            result[t] = raw
+        return result
+
+    for ticker in tickers:
+        try:
+            df = raw[ticker].dropna(how="all")
+            if not df.empty and len(df) >= 50:
+                result[ticker] = df
+        except (KeyError, TypeError):
+            pass
+    return result
+
+
+def _check_fundamentals(ticker: str) -> bool:
+    """Return True if stock has positive EPS AND positive revenue growth."""
+    try:
+        info = yf.Ticker(ticker).info
+        eps = info.get("trailingEps", None)
+        rev_growth = info.get("revenueGrowth", None)
+        eps_ok = eps is not None and eps > 0
+        growth_ok = rev_growth is not None and rev_growth > 0
+        return eps_ok and growth_ok
+    except Exception:
+        return False
 
 
 def run() -> None:
+    logger.info("=== Stock Breakout Scanner — Full US Market ===")
+
     tickers = get_universe()
-    total = len(tickers)
-    logger.info(f"Scanning {total} stocks with {FETCH_WORKERS} workers...")
+    logger.info(f"Scanning {len(tickers)} stocks in batches of {BATCH_SIZE}...")
 
-    candidates: list[dict] = []
+    # Stage 1 + 2: Batch download and technical screening
+    technical_candidates: list[dict] = []
+    batches = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
 
-    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-        futures = {pool.submit(_fetch, t): t for t in tickers}
-        for done, future in enumerate(as_completed(futures), 1):
-            ticker, hist = future.result()
+    for batch_num, batch in enumerate(batches):
+        hist_map = _batch_download(batch)
+
+        for ticker, hist in hist_map.items():
+            try:
+                latest_price = float(hist["Close"].iloc[-1])
+            except Exception:
+                continue
+
+            # Quick price filter before full analysis
+            if not (MIN_PRICE <= latest_price <= MAX_PRICE):
+                continue
+
             signal = analyze(ticker, hist)
             if signal:
-                candidates.append(signal)
-            if done % 100 == 0 or done == total:
-                logger.info(f"  {done}/{total} processed — {len(candidates)} candidates so far")
+                technical_candidates.append(signal)
 
-    candidates.sort(key=lambda x: x["score"], reverse=True)
-    top = candidates[:TOP_N]
+        if (batch_num + 1) % 10 == 0 or batch_num + 1 == len(batches):
+            pct = (batch_num + 1) / len(batches) * 100
+            logger.info(
+                f"  Batch {batch_num+1}/{len(batches)} ({pct:.0f}%) — "
+                f"{len(technical_candidates)} technical candidates so far"
+            )
+        time.sleep(0.5)  # be polite to yfinance servers
 
-    logger.info(f"\nTop {len(top)} candidates:")
+    logger.info(f"Technical screening done: {len(technical_candidates)} candidates")
+
+    # Stage 3: Fundamentals check — only on top technical candidates
+    technical_candidates.sort(key=lambda x: x["score"], reverse=True)
+    top_technical = technical_candidates[:min(200, len(technical_candidates))]
+
+    logger.info(f"Checking fundamentals for top {len(top_technical)} candidates...")
+    final_candidates: list[dict] = []
+
+    for i, stock in enumerate(top_technical):
+        ticker = stock["ticker"]
+        if _check_fundamentals(ticker):
+            final_candidates.append(stock)
+            logger.info(f"  PASS {ticker}: score={stock['score']} EPS+growth confirmed")
+        if (i + 1) % 20 == 0:
+            logger.info(f"  Fundamentals checked: {i+1}/{len(top_technical)}")
+
+    logger.info(f"\nFinal candidates after profitability filter: {len(final_candidates)}")
+
+    top = final_candidates[:TOP_N]
     for c in top:
         flags = " ".join(filter(None, [
             "BREAKOUT" if c["is_breakout"] else "",
@@ -66,8 +143,9 @@ def run() -> None:
             ">200MA" if c["above_sma200"] else "",
         ]))
         logger.info(
-            f"  {c['ticker']:6s}  score={c['score']:5.1f}  "
-            f"vol={c['volume_ratio']}x  RSI={c['rsi']}  {flags}"
+            f"  {c['ticker']:6s}  ${c['price']:6.2f}  "
+            f"score={c['score']:5.1f}  vol={c['volume_ratio']}x  "
+            f"RSI={c['rsi']}  {flags}"
         )
 
     send_alert(top, date.today().strftime("%Y-%m-%d"))

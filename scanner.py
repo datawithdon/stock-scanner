@@ -69,16 +69,23 @@ def _batch_download(tickers: list[str]) -> dict[str, pd.DataFrame]:
 
 
 def _check_fundamentals(ticker: str) -> bool:
-    """Return True if stock has positive EPS AND positive revenue growth."""
+    """
+    Return True if stock passes profitability check.
+    Rules:
+    - EPS actively negative (<-0.5) → fail (company is burning cash badly)
+    - EPS positive → pass
+    - EPS None or slightly negative → pass with benefit of doubt (data missing for small caps)
+    - Revenue growth: bonus signal only, not a hard requirement
+    """
     try:
         info = yf.Ticker(ticker).info
         eps = info.get("trailingEps", None)
-        rev_growth = info.get("revenueGrowth", None)
-        eps_ok = eps is not None and eps > 0
-        growth_ok = rev_growth is not None and rev_growth > 0
-        return eps_ok and growth_ok
+        # Hard fail only if EPS is clearly deeply negative
+        if eps is not None and eps < -0.5:
+            return False
+        return True
     except Exception:
-        return False
+        return True  # benefit of doubt if data unavailable
 
 
 def run() -> None:

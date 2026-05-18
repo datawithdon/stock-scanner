@@ -1,0 +1,73 @@
+name: Stock Breakout Scanner
+
+on:
+  schedule:
+    # Pre-market news scan: 11:00 AM UTC = 6:00 AM ET (Mon–Fri)
+    - cron: "0 11 * * 1-5"
+    # EOD technical scan: 9:00 PM UTC = 5:00 PM ET (Mon–Fri)
+    - cron: "0 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which scanner to run"
+        required: false
+        default: "both"
+        type: choice
+        options: [both, news, technical]
+
+jobs:
+  # ── Pre-market news intelligence (6am ET) ────────────────────────────────
+  news-scan:
+    name: Pre-Market News Intelligence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Run on the 6am cron OR when manually triggered (both/news)
+    if: >-
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'both' || github.event.inputs.mode == 'news') ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 11')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run news scanner
+        env:
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python news_scanner.py
+
+  # ── EOD technical scanner (5pm ET) ───────────────────────────────────────
+  technical-scan:
+    name: EOD Technical Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'both' || github.event.inputs.mode == 'technical') ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 21')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run technical scanner
+        env:
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        run: python scanner.py

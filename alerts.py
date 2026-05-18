@@ -1,3 +1,4 @@
+import html as html_mod
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -14,7 +15,7 @@ def _row(i: int, c: dict) -> str:
     checks = lambda v: "&#10003;" if v else "&#8212;"
     return (
         f'<tr style="background:{bg}">'
-        f'<td style="font-weight:700;padding:8px 12px">{c["ticker"]}</td>'
+        f'<td style="font-weight:700;padding:8px 12px">{html_mod.escape(str(c["ticker"]))}</td>'
         f'<td style="padding:8px 12px">${c["price"]}</td>'
         f'<td style="padding:8px 12px;color:{chg_color}">{chg}</td>'
         f'<td style="padding:8px 12px">{c["volume_ratio"]}x</td>'

@@ -10,6 +10,7 @@ Signal layers (fastest to slowest lead time):
 
 All items pass keyword pre-filter then Claude Haiku scoring.
 """
+import html as html_mod
 import logging
 from collections import defaultdict
 from datetime import date
@@ -95,15 +96,20 @@ def _build_html(stocks: list[dict], scan_date: str) -> str:
         score_color = "#1b5e20" if s["composite_score"] >= 70 else "#e65100"
         signals_html = ""
         for sig in s["top_signals"]:
-            link = f'<a href="{sig["url"]}" style="color:#1565c0">{sig["headline"][:90]}</a>' if sig["url"] else sig["headline"][:90]
+            safe_headline = html_mod.escape(sig["headline"][:90])
+            safe_reason = html_mod.escape(sig.get("reason", ""))
+            raw_url = sig.get("url", "")
+            # Only allow http/https URLs — block javascript: and data: schemes
+            safe_url = raw_url if raw_url.startswith(("https://", "http://")) else ""
+            link = f'<a href="{safe_url}" style="color:#1565c0">{safe_headline}</a>' if safe_url else safe_headline
             signals_html += (
                 f'<div style="font-size:12px;margin:3px 0;color:#424242">'
                 f'{_CATALYST_EMOJI.get(sig["catalyst"],"📰")} {link}'
-                f'<span style="color:#757575"> — {sig["reason"]}</span></div>'
+                f'<span style="color:#757575"> — {safe_reason}</span></div>'
             )
         rows += (
             f'<tr style="background:{bg};vertical-align:top">'
-            f'<td style="padding:10px 12px;font-weight:700;font-size:16px">{s["ticker"]}</td>'
+            f'<td style="padding:10px 12px;font-weight:700;font-size:16px">{html_mod.escape(str(s["ticker"]))}</td>'
             f'<td style="padding:10px 12px">{catalyst_badges}</td>'
             f'<td style="padding:10px 12px">{signals_html}</td>'
             f'<td style="padding:10px 12px;font-weight:700;color:{score_color};font-size:18px">'

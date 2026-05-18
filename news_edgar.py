@@ -15,7 +15,7 @@ from news_keywords import MA, INSIDER, passes_filter
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {"User-Agent": "StockBreakoutScanner contact@example.com"}
+_HEADERS = {"User-Agent": "StockBreakoutScanner malithdisala@gmail.com"}
 _EFTS = "https://efts.sec.gov/EFTS/hits"
 _SUBMISSIONS = "https://data.sec.gov/submissions/CIK{}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"

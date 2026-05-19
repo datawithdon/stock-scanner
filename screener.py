@@ -73,6 +73,26 @@ def analyze(ticker: str, hist: pd.DataFrame):
 
         score = round(vol_score + breakout_score + ma_score + rsi_score, 1)
 
+        # Build signal summary string
+        parts = []
+        if vol_ratio >= 10:
+            parts.append(f"{vol_ratio}x volume explosion")
+        else:
+            parts.append(f"{vol_ratio}x avg volume")
+        if is_breakout:
+            parts.append(f"broke {BREAKOUT_LOOKBACK}d high")
+        ma_parts = []
+        if above_50:
+            ma_parts.append("50d")
+        if above_200:
+            ma_parts.append("200d")
+        if ma_parts:
+            parts.append(f"above {' & '.join(ma_parts)} MA")
+        parts.append(f"RSI {rsi}")
+        if ret_3m > 20:
+            parts.append(f"+{round(ret_3m, 1)}% 3mo trend")
+        signal_summary = " · ".join(parts)
+
         return {
             "ticker": ticker,
             "price": round(price, 2),
@@ -85,6 +105,8 @@ def analyze(ticker: str, hist: pd.DataFrame):
             "above_sma200": above_200,
             "ret_3m": round(ret_3m, 1),
             "score": score,
+            "signal_summary": signal_summary,
+            "ai_reason": "",  # filled in by scanner after Claude call
         }
 
     except Exception:

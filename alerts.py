@@ -13,6 +13,14 @@ def _row(i: int, c: dict) -> str:
     chg = f"{'+' if c['pct_change'] >= 0 else ''}{c['pct_change']}%"
     score_color = "#1b5e20" if c["score"] >= 70 else "#e65100" if c["score"] >= 50 else "#424242"
     checks = lambda v: "&#10003;" if v else "&#8212;"
+    signal_summary = html_mod.escape(c.get("signal_summary", ""))
+    ai_reason = html_mod.escape(c.get("ai_reason", ""))
+    reason_html = (
+        f'<div style="font-size:12px;color:#424242">{signal_summary}</div>'
+        f'<div style="font-size:12px;color:#1565c0;font-style:italic">{ai_reason}</div>'
+        if ai_reason else
+        f'<div style="font-size:12px;color:#424242">{signal_summary}</div>'
+    )
     return (
         f'<tr style="background:{bg}">'
         f'<td style="font-weight:700;padding:8px 12px">{html_mod.escape(str(c["ticker"]))}</td>'
@@ -25,6 +33,7 @@ def _row(i: int, c: dict) -> str:
         f'<td style="padding:8px 12px;text-align:center">{checks(c["above_sma200"])}</td>'
         f'<td style="padding:8px 12px">{c["ret_3m"]}%</td>'
         f'<td style="padding:8px 12px;font-weight:700;color:{score_color}">{c["score"]}</td>'
+        f'<td style="padding:8px 12px;min-width:200px">{reason_html}</td>'
         "</tr>"
     )
 
@@ -51,6 +60,7 @@ def _build_html(candidates: list[dict], scan_date: str) -> str:
       <th style="{header_style}">&gt;200d MA</th>
       <th style="{header_style}">3mo Ret</th>
       <th style="{header_style}">Score /100</th>
+      <th style="{header_style}">Why Selected</th>
     </tr>
   </thead>
   <tbody>{rows}</tbody>

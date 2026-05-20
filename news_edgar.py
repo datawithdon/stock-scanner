@@ -93,13 +93,19 @@ def scan_edgar(hours_back: int = 24) -> list[dict]:
     items: list[dict] = []
     seen: set[str] = set()
 
-    # M&A keywords in 8-K filings
+    # M&A and separation events in 8-K filings
     ma_queries = [
         "strategic alternatives",
         "merger agreement",
         "acquisition agreement",
         "spin-off",
         "tender offer",
+        "separation agreement",        # e.g. SanDisk separating from WD
+        "distribution agreement",      # parent distributing shares of new company
+        "plan of separation",
+        "independent company",         # "will become an independent company"
+        "carve-out",
+        "split-off",
     ]
     for q in ma_queries:
         hits = _search_efts(q, "8-K", since)
@@ -108,7 +114,32 @@ def scan_edgar(hours_back: int = 24) -> list[dict]:
             if key not in seen:
                 seen.add(key)
                 items.append(item)
-        time.sleep(0.3)  # be polite to EDGAR
+        time.sleep(0.3)
+
+    # Form 10 — spin-off registration statements (filed before a company separates)
+    # This is how the market finds out weeks/months early about a spin-off
+    hits = _search_efts("spin-off", "10-12B", since)
+    for item in _hits_to_items(hits, "M&A", "spin-off registration (Form 10)"):
+        key = (item["ticker"], "Form10")
+        if key not in seen:
+            seen.add(key)
+            items.append(item)
+    time.sleep(0.3)
+
+    # Stock splits in 8-K filings
+    split_queries = [
+        "stock split",
+        "forward stock split",
+        "share split",
+    ]
+    for q in split_queries:
+        hits = _search_efts(q, "8-K", since)
+        for item in _hits_to_items(hits, "catalyst", q):
+            key = (item["ticker"], "split")
+            if key not in seen:
+                seen.add(key)
+                items.append(item)
+        time.sleep(0.3)
 
     # Activist investors: SC 13D (>5% stake with intent to influence)
     hits = _search_efts("beneficial ownership", "SC 13D", since)

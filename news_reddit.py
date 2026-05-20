@@ -53,10 +53,18 @@ def _fetch_subreddit(sub: str, hours_back: int) -> dict[str, dict]:
         try:
             params = {"after": after} if after else {}
             r = requests.get(url, headers=_HEADERS, params=params, timeout=15)
-            r.raise_for_status()
+            if r.status_code == 429:
+                logger.warning(f"Reddit r/{sub} rate-limited (429) — skipping")
+                break
+            if r.status_code == 403:
+                logger.warning(f"Reddit r/{sub} blocked (403) — API may require auth")
+                break
+            if r.status_code != 200:
+                logger.warning(f"Reddit r/{sub} HTTP {r.status_code}")
+                break
             data = r.json()
         except Exception as e:
-            logger.debug(f"Reddit {sub} page {page}: {e}")
+            logger.warning(f"Reddit r/{sub} page {page} error: {e}")
             break
 
         posts = data.get("data", {}).get("children", [])
@@ -94,6 +102,42 @@ def _fetch_subreddit(sub: str, hours_back: int) -> dict[str, dict]:
     return counts
 
 
+def _fetch_stocktwits_trending() -> list[dict]:
+    """
+    Stocktwits free trending API — no auth required.
+    Returns tickers currently trending on Stocktwits with bullish/bearish sentiment.
+    """
+    url = "https://api.stocktwits.com/api/2/trending/symbols.json"
+    try:
+        r = requests.get(url, headers=_HEADERS, timeout=15)
+        if r.status_code != 200:
+            logger.warning(f"Stocktwits trending HTTP {r.status_code}")
+            return []
+        symbols = r.json().get("symbols", [])
+        results = []
+        for sym in symbols:
+            ticker = sym.get("symbol", "")
+            watchlist_count = sym.get("watchlist_count", 0)
+            if not ticker or len(ticker) > 5:
+                continue
+            results.append({
+                "ticker": ticker,
+                "mentions": watchlist_count,
+                "sentiment": 0.3,  # trending = mild bullish bias
+                "source": "Stocktwits",
+                "catalyst": "social",
+                "bullish_score": 5,
+                "headline": f"Stocktwits trending: {ticker} — {watchlist_count:,} watchers",
+                "reason": "trending on Stocktwits",
+                "url": f"https://stocktwits.com/symbol/{ticker}",
+            })
+        logger.info(f"  Stocktwits: {len(results)} trending tickers")
+        return results
+    except Exception as e:
+        logger.warning(f"Stocktwits trending failed: {e}")
+        return []
+
+
 def scan_reddit(hours_back: int = 24, min_mentions: int = 3) -> list[dict]:
     merged: dict[str, dict] = {}
 
@@ -118,10 +162,16 @@ def scan_reddit(hours_back: int = 24, min_mentions: int = 3) -> list[dict]:
             "sentiment": round(avg_sent, 2),
             "source": "Reddit",
             "catalyst": "social",
+            "bullish_score": min(8, 4 + data["mentions"]),
             "headline": f"Reddit: {data['mentions']} mentions across WSB/stocks/investing",
+            "reason": f"{data['mentions']} mentions, sentiment {round(avg_sent, 2):+.2f}",
             "url": f"https://www.reddit.com/search/?q={ticker}&sort=new&t=day",
         })
 
     results.sort(key=lambda x: x["mentions"], reverse=True)
     logger.info(f"Reddit scan: {len(results)} tickers with {min_mentions}+ mentions")
-    return results
+
+    # Stocktwits trending as supplementary social signal
+    stocktwits = _fetch_stocktwits_trending()
+
+    return results + stocktwits

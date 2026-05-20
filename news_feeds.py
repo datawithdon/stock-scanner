@@ -17,14 +17,30 @@ from news_keywords import passes_filter, classify
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {"User-Agent": "StockBreakoutScanner/1.0"}
+# Browser UA — many financial sites block generic bot strings from cloud IPs
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
 
 RSS_FEEDS = [
+    # General financial news
     ("Yahoo Finance", "https://finance.yahoo.com/rss/topstories"),
-    ("MarketWatch", "https://feeds.marketwatch.com/marketwatch/topstories/"),
-    ("Benzinga", "https://www.benzinga.com/feed"),
-    ("Seeking Alpha", "https://seekingalpha.com/feed.xml"),
+    ("MarketWatch Top Stories", "https://feeds.marketwatch.com/marketwatch/topstories/"),
+    ("MarketWatch Real-time", "https://feeds.marketwatch.com/marketwatch/realtimeheadlines/"),
+    ("CNBC Markets", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135"),
     ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews"),
+    # Catalyst-specific — press releases with M&A, FDA, contracts
+    ("GlobeNewswire M&A", "https://www.globenewswire.com/RssFeed/subjectcode/22-Mergers+Acquisitions"),
+    ("GlobeNewswire Pharma", "https://www.globenewswire.com/RssFeed/industry/Pharmaceuticals"),
+    ("GlobeNewswire Finance", "https://www.globenewswire.com/RssFeed/industry/Financial"),
+    # Analyst coverage
+    ("Benzinga", "https://www.benzinga.com/feed"),
+    ("Investopedia", "https://www.investopedia.com/feeds/rss.aspx"),
 ]
 
 # Common financial news ticker patterns
@@ -58,16 +74,20 @@ def _parse_pub_date(entry: ET.Element, ns: dict) -> datetime:
 
 def _fetch_feed(name: str, url: str, since: datetime) -> list[dict]:
     try:
-        r = requests.get(url, headers=_HEADERS, timeout=15)
-        r.raise_for_status()
+        r = requests.get(url, headers=_HEADERS, timeout=20)
+        if r.status_code != 200:
+            logger.warning(f"Feed '{name}' HTTP {r.status_code}: {url}")
+            return []
         root = ET.fromstring(r.content)
     except Exception as e:
-        logger.debug(f"Feed '{name}' failed: {e}")
+        logger.warning(f"Feed '{name}' failed ({type(e).__name__}): {e}")
         return []
 
-    items = []
     # Handle both RSS <item> and Atom <entry>
     entries = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
+    total_fetched = len(entries)
+    recent = 0
+    items = []
 
     for entry in entries:
         title_el = entry.find("title") or entry.find("{http://www.w3.org/2005/Atom}title")
@@ -78,9 +98,14 @@ def _fetch_feed(name: str, url: str, since: datetime) -> list[dict]:
         desc = (desc_el.text or "") if desc_el is not None else ""
         link = (link_el.get("href") or link_el.text or "") if link_el is not None else ""
 
+        # Strip CDATA wrappers if present
+        title = re.sub(r"<!\[CDATA\[(.*?)]]>", r"\1", title, flags=re.DOTALL).strip()
+        desc = re.sub(r"<!\[CDATA\[(.*?)]]>", r"\1", desc, flags=re.DOTALL).strip()
+
         pub_date = _parse_pub_date(entry, {})
         if pub_date < since:
             continue
+        recent += 1
 
         full_text = f"{title} {desc}"
         if not passes_filter(full_text):
@@ -96,6 +121,7 @@ def _fetch_feed(name: str, url: str, since: datetime) -> list[dict]:
             "published": pub_date.isoformat(),
         })
 
+    logger.info(f"  {name}: {total_fetched} articles fetched, {recent} recent, {len(items)} matched keywords")
     return items
 
 
@@ -105,7 +131,6 @@ def scan_feeds(hours_back: int = 20) -> list[dict]:
 
     for name, url in RSS_FEEDS:
         items = _fetch_feed(name, url, since)
-        logger.info(f"  {name}: {len(items)} relevant articles")
         all_items.extend(items)
         time.sleep(0.5)
 

@@ -14,6 +14,20 @@ MA = [
     "joint venture", "divestiture", "divest",
     "going private", "management buyout", "mbo",
     "special committee", "exploration of strategic",
+    # Spin-offs / corporate separations
+    "separation agreement", "plan of separation",
+    "independent company", "standalone company",
+    "carve-out", "carve out", "carved out",
+    "split-off", "split off",
+    "breaking away", "breaking off",
+    "will be spun", "to be spun off",
+    "distribution of shares", "record date",
+    "new publicly traded", "separately traded",
+    "form 10", "registration statement",
+    # Stock splits
+    "stock split", "forward stock split",
+    "share split", "split adjusted",
+    "reverse stock split",
 ]
 
 ANALYST = [

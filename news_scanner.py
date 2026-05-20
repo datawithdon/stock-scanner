@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 _CATALYST_EMOJI = {
     "M&A": "🏦",
     "analyst": "📈",
+    "earnings": "💰",
+    "catalyst": "⚡",
     "sector": "🌐",
     "insider": "🔍",
     "social": "🔥",

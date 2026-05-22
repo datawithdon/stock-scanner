@@ -1,8 +1,10 @@
 """
-Scans free RSS feeds for news headlines containing catalyst keywords.
-No API key required for any source.
+Scans free RSS feeds for news headlines.
+No API key required.
 
-Ticker extraction: looks for $TICKER patterns and known S&P 500/400 company names.
+All recent articles are passed to Claude for scoring — the keyword pre-filter
+is intentionally skipped here because general news headlines rarely contain
+the exact catalyst keywords but Claude can still detect relevance.
 """
 import logging
 import re
@@ -13,11 +15,11 @@ from xml.etree import ElementTree as ET
 
 import requests
 
-from news_keywords import passes_filter, classify
+from news_keywords import classify
 
 logger = logging.getLogger(__name__)
 
-# Browser UA — many financial sites block generic bot strings from cloud IPs
+# Browser UA — generic bot strings are blocked by most financial sites from cloud IPs
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -28,22 +30,13 @@ _HEADERS = {
 }
 
 RSS_FEEDS = [
-    # General financial news
     ("Yahoo Finance", "https://finance.yahoo.com/rss/topstories"),
-    ("MarketWatch Top Stories", "https://feeds.marketwatch.com/marketwatch/topstories/"),
-    ("MarketWatch Real-time", "https://feeds.marketwatch.com/marketwatch/realtimeheadlines/"),
+    ("MarketWatch", "https://feeds.marketwatch.com/marketwatch/topstories/"),
     ("CNBC Markets", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135"),
-    ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews"),
-    # Catalyst-specific — press releases with M&A, FDA, contracts
     ("GlobeNewswire M&A", "https://www.globenewswire.com/RssFeed/subjectcode/22-Mergers+Acquisitions"),
-    ("GlobeNewswire Pharma", "https://www.globenewswire.com/RssFeed/industry/Pharmaceuticals"),
-    ("GlobeNewswire Finance", "https://www.globenewswire.com/RssFeed/industry/Financial"),
-    # Analyst coverage
     ("Benzinga", "https://www.benzinga.com/feed"),
-    ("Investopedia", "https://www.investopedia.com/feeds/rss.aspx"),
 ]
 
-# Common financial news ticker patterns
 _TICKER_RE = re.compile(r'\$([A-Z]{1,5})\b|NYSE:\s*([A-Z]{1,5})|NASDAQ:\s*([A-Z]{1,5})')
 _COMMON_NOISE = {"CEO", "CFO", "COO", "IPO", "ETF", "US", "EU", "UK", "AI", "IT", "AT"}
 
@@ -58,8 +51,12 @@ def _extract_tickers(text: str) -> list[str]:
     return list(set(tickers))
 
 
-def _parse_pub_date(entry: ET.Element, ns: dict) -> datetime:
-    for tag in ["{http://www.w3.org/2005/Atom}updated", "{http://www.w3.org/2005/Atom}published", "pubDate"]:
+def _parse_pub_date(entry: ET.Element) -> datetime:
+    for tag in [
+        "{http://www.w3.org/2005/Atom}updated",
+        "{http://www.w3.org/2005/Atom}published",
+        "pubDate",
+    ]:
         el = entry.find(tag)
         if el is not None and el.text:
             try:
@@ -70,6 +67,13 @@ def _parse_pub_date(entry: ET.Element, ns: dict) -> datetime:
                 except Exception:
                     pass
     return datetime.now(timezone.utc)
+
+
+def _clean(text: str) -> str:
+    """Strip CDATA and HTML tags."""
+    text = re.sub(r"<!\[CDATA\[(.*?)]]>", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return text.strip()
 
 
 def _fetch_feed(name: str, url: str, since: datetime) -> list[dict]:
@@ -83,45 +87,43 @@ def _fetch_feed(name: str, url: str, since: datetime) -> list[dict]:
         logger.warning(f"Feed '{name}' failed ({type(e).__name__}): {e}")
         return []
 
-    # Handle both RSS <item> and Atom <entry>
     entries = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
     total_fetched = len(entries)
-    recent = 0
     items = []
 
     for entry in entries:
         title_el = entry.find("title") or entry.find("{http://www.w3.org/2005/Atom}title")
-        desc_el = entry.find("description") or entry.find("{http://www.w3.org/2005/Atom}summary")
+        desc_el = (
+            entry.find("{http://purl.org/rss/1.0/modules/content/}encoded")
+            or entry.find("description")
+            or entry.find("{http://www.w3.org/2005/Atom}summary")
+        )
         link_el = entry.find("link") or entry.find("{http://www.w3.org/2005/Atom}link")
 
-        title = (title_el.text or "") if title_el is not None else ""
-        desc = (desc_el.text or "") if desc_el is not None else ""
+        title = _clean((title_el.text or "") if title_el is not None else "")
+        desc = _clean((desc_el.text or "") if desc_el is not None else "")
         link = (link_el.get("href") or link_el.text or "") if link_el is not None else ""
 
-        # Strip CDATA wrappers if present
-        title = re.sub(r"<!\[CDATA\[(.*?)]]>", r"\1", title, flags=re.DOTALL).strip()
-        desc = re.sub(r"<!\[CDATA\[(.*?)]]>", r"\1", desc, flags=re.DOTALL).strip()
+        if not title:
+            continue
 
-        pub_date = _parse_pub_date(entry, {})
+        pub_date = _parse_pub_date(entry)
         if pub_date < since:
             continue
-        recent += 1
 
         full_text = f"{title} {desc}"
-        if not passes_filter(full_text):
-            continue
-
         tickers = _extract_tickers(full_text)
+
         items.append({
             "tickers": tickers,
-            "headline": title.strip(),
+            "headline": title,
             "source": name,
             "catalyst": classify(full_text),
             "url": link,
             "published": pub_date.isoformat(),
         })
 
-    logger.info(f"  {name}: {total_fetched} articles fetched, {recent} recent, {len(items)} matched keywords")
+    logger.info(f"  {name}: {total_fetched} articles fetched, {len(items)} recent → sending all to Claude")
     return items
 
 
@@ -134,5 +136,5 @@ def scan_feeds(hours_back: int = 20) -> list[dict]:
         all_items.extend(items)
         time.sleep(0.5)
 
-    logger.info(f"RSS scan total: {len(all_items)} items")
+    logger.info(f"RSS scan total: {len(all_items)} articles → Claude will score all")
     return all_items

@@ -20,7 +20,7 @@ FETCH_WORKERS = 10
 
 # News scanner
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-NEWS_LOOKBACK_HOURS = 20          # How far back to scan RSS / EDGAR
+NEWS_LOOKBACK_HOURS = 48          # How far back to scan RSS / EDGAR (48h covers full trading day + overnight)
 REDDIT_LOOKBACK_HOURS = 24
 NEWS_MIN_SCORE = 5                # Claude score threshold (0–10) to include in email
 NEWS_TOP_N = 25                   # Max stocks in news alert email

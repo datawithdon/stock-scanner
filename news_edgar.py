@@ -6,6 +6,7 @@ Uses EDGAR EFTS full-text search — no API key required.
 """
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -15,7 +16,10 @@ from news_keywords import MA, INSIDER, passes_filter
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {"User-Agent": "StockBreakoutScanner contact@example.com"}
+# SEC asks automated clients to identify themselves with a contact email.
+# It is read from the environment so it never lives in the source code.
+_CONTACT = os.environ.get("SEC_CONTACT_EMAIL") or os.environ.get("EMAIL_FROM") or "contact@example.com"
+_HEADERS = {"User-Agent": f"StockBreakoutScanner {_CONTACT}"}
 _EFTS = "https://efts.sec.gov/EFTS/hits"
 _SUBMISSIONS = "https://data.sec.gov/submissions/CIK{}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"

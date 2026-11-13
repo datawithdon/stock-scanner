@@ -15,6 +15,7 @@ import logging
 from collections import defaultdict
 from datetime import date
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -92,7 +93,7 @@ def _build_html(stocks: list[dict], scan_date: str) -> str:
         bg = "#f0fff4" if i % 2 == 0 else "#fff"
         catalyst_badges = " ".join(
             f'<span style="background:#1565c0;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px">'
-            f'{_CATALYST_EMOJI.get(c,"📰")} {c}</span>'
+            f'{_CATALYST_EMOJI.get(c,"📰")} {html_mod.escape(str(c))}</span>'
             for c in s["catalysts"]
         )
         score_color = "#1b5e20" if s["composite_score"] >= 70 else "#e65100"
@@ -103,7 +104,8 @@ def _build_html(stocks: list[dict], scan_date: str) -> str:
             raw_url = sig.get("url", "")
             # Only allow http/https URLs — block javascript: and data: schemes
             safe_url = raw_url if raw_url.startswith(("https://", "http://")) else ""
-            link = f'<a href="{safe_url}" style="color:#1565c0">{safe_headline}</a>' if safe_url else safe_headline
+            link = (f'<a href="{html_mod.escape(safe_url, quote=True)}" style="color:#1565c0">{safe_headline}</a>'
+                    if safe_url else safe_headline)
             signals_html += (
                 f'<div style="font-size:12px;margin:3px 0;color:#424242">'
                 f'{_CATALYST_EMOJI.get(sig["catalyst"],"📰")} {link}'
@@ -166,7 +168,8 @@ def _send_email(stocks: list[dict], scan_date: str) -> None:
     msg.attach(MIMEText(_build_html(stocks, scan_date), "html"))
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
+        # Verify Gmail's certificate; starttls() without a context does not.
+        server.starttls(context=ssl.create_default_context())
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
 

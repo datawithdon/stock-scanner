@@ -1,5 +1,6 @@
 import html as html_mod
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import date
@@ -94,7 +95,8 @@ def send_alert(candidates: list, scan_date: str = None) -> None:
     msg.attach(MIMEText(_build_html(candidates, scan_date), "html"))
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
+        # Verify Gmail's certificate; starttls() without a context does not.
+        server.starttls(context=ssl.create_default_context())
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
 
